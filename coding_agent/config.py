@@ -1,5 +1,69 @@
 """配置加载：从环境变量或项目根目录的 .env 文件读取 LLM 相关配置。
 
-提供：API key、base_url、模型名，以及最大轮数、超时等运行参数。
-凭据一律来自环境变量或未入库的 .env 文件，绝不硬编码。
+凭据（API key）一律来自环境变量或未入库的 .env 文件，绝不硬编码。
+之所以叫 config 而不直接用 os.environ，是为了把「从哪读、默认值是什么」
+集中在一个地方，上层代码只跟 Config 对象打交道。
 """
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+# 项目根目录 = 本文件所在包的上一级（即仓库根目录）
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_dotenv(path: Path) -> None:
+    """极简 .env 解析器：把 KEY=VALUE 行读入 os.environ。
+
+    只支持三类行：空行、# 注释、KEY=VALUE；值两端的引号会被剥掉。
+    关键规则：**已存在的环境变量优先**，.env 不会覆盖它——符合
+    「环境变量 > .env 文件」的惯例。自写实现，不依赖 python-dotenv。
+    """
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+@dataclass(frozen=True)
+class Config:
+    """运行所需的全部配置项。frozen 表示创建后不可改，避免中途被篡改。"""
+
+    api_key: str
+    base_url: str
+    model: str
+    max_turns: int
+    timeout: float
+
+    @classmethod
+    def load(cls) -> "Config":
+        _load_dotenv(PROJECT_ROOT / ".env")
+
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        if not api_key:
+            raise RuntimeError(
+                "未找到 DEEPSEEK_API_KEY。\n"
+                "请在项目根目录创建 .env 文件（内容参考 .env.example），"
+                "或设置环境变量 DEEPSEEK_API_KEY。"
+            )
+
+        return cls(
+            api_key=api_key,
+            # base_url 指向 OpenAI 兼容网关；换成其他厂商只改这里
+            base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            model=os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+            max_turns=int(os.environ.get("AGENT_MAX_TURNS", "30")),
+            timeout=float(os.environ.get("AGENT_TIMEOUT", "120")),
+        )
