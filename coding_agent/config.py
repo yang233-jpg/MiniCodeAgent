@@ -1,8 +1,6 @@
-"""配置加载：从环境变量或项目根目录的 .env 文件读取 LLM 相关配置。
+"""配置加载：从环境变量或项目根目录的 .env 文件读取配置。
 
 凭据（API key）一律来自环境变量或未入库的 .env 文件，绝不硬编码。
-之所以叫 config 而不直接用 os.environ，是为了把「从哪读、默认值是什么」
-集中在一个地方，上层代码只跟 Config 对象打交道。
 """
 
 from __future__ import annotations
@@ -18,9 +16,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 def _load_dotenv(path: Path) -> None:
     """极简 .env 解析器：把 KEY=VALUE 行读入 os.environ。
 
-    只支持三类行：空行、# 注释、KEY=VALUE；值两端的引号会被剥掉。
-    关键规则：**已存在的环境变量优先**，.env 不会覆盖它——符合
-    「环境变量 > .env 文件」的惯例。自写实现，不依赖 python-dotenv。
+    只处理空行、# 注释、KEY=VALUE 三类行；已存在的环境变量优先，.env 不覆盖它。
+    自写实现，不依赖 python-dotenv。
     """
     if not path.exists():
         return
@@ -45,6 +42,7 @@ class Config:
     base_url: str
     model: str
     max_turns: int
+    max_tool_calls: int
     timeout: float
     max_context_tokens: int
     tool_result_max_chars: int
@@ -68,6 +66,8 @@ class Config:
             base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             model=os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
             max_turns=int(os.environ.get("AGENT_MAX_TURNS", "30")),
+            # 单次任务允许的最大工具调用次数，防止模型反复调用工具失控
+            max_tool_calls=int(os.environ.get("AGENT_MAX_TOOL_CALLS", "80")),
             timeout=float(os.environ.get("AGENT_TIMEOUT", "120")),
             # deepseek-chat 上下文窗口约 64K，预留输出空间后取 40K 作为裁剪预算
             max_context_tokens=int(os.environ.get("AGENT_MAX_CONTEXT_TOKENS", "40000")),

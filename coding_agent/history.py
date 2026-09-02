@@ -1,19 +1,10 @@
-"""上下文管理：独立成 ContextManager，负责决定「当前该把哪些信息发给模型」。
+"""上下文管理：由 ContextManager 决定「当前该把哪些信息发给模型」。
 
-对应作业里上下文管理的要求，逐条落实：
-1. Token 预算控制——不引入精确 tokenizer，用启发式估算；
-2. 工具结果进上下文前做长度限制，避免 read_file/grep/run_command 输出撑爆上下文；
-3. 历史裁剪按「完整交互轮次」处理：assistant 的 tool_calls 与对应 tool 结果不拆开，
-   并正确处理一次调用多个工具的情况（一条 assistant 对应多条 tool 结果）；
-4. 逻辑上分开 system prompt / 当前任务 / 历史摘要 / 最近几轮，始终保留前两者，
-   优先保留最近的上下文；
-5. 可选的历史摘要：上下文过长时把较早历史压成「任务状态摘要」（已发现的问题、
-   已完成的修改、测试结果、当前错误、下一步计划），只在超预算（达到阈值）时触发，
-   不会每轮都调模型；被裁但暂未达阈值的轮会暂存，摘要失败时保留重试、不丢失信息；
-6. 与具体 LLM/OpenAI API 解耦：ContextManager 只依赖一个可调用对象做摘要，
-   LLMClient 只负责调用模型，二者职责分离。
-
-纯内存 + 纯函数实现，不引入数据库 / Redis / LangChain 等依赖。
+要点：token 预算（启发式估算，不引入精确 tokenizer）；工具结果进上下文前限长；
+历史按「完整交互轮次」裁剪（assistant 的 tool_calls 与对应 tool 结果不拆开）；
+system / 任务 / 摘要 / 最近几轮分层，始终保留前两者；可选的历史摘要——超阈值时
+把旧轮压成结构化「任务状态摘要」，失败不丢信息；与具体 LLM 解耦，只依赖一个
+可调用对象做摘要。纯内存实现，无额外依赖。
 """
 
 from __future__ import annotations
@@ -40,8 +31,8 @@ SUMMARY_INSTRUCTION = """你负责把 coding agent 的一段历史交互提炼�
 
 以下是需要归纳的历史交互："""
 
-# 被裁剪的轮至少累积这么多才触发摘要，避免频繁调用模型
-MIN_SUMMARY_TURNS = 3
+# 被裁剪的轮累积到约这么多 token 才触发摘要，避免频繁调用模型
+SUMMARY_BUFFER_TOKENS = 2000
 
 
 def estimate_tokens(text: str) -> int:
@@ -113,6 +104,10 @@ class ContextManager:
     def add_turn(self, assistant_msg: dict, tool_results: list[dict]) -> None:
         """记录一轮完整交互：assistant 消息 + 它的所有 tool 结果。"""
         self.turns.append([assistant_msg, *tool_results])
+
+    def add_user_message(self, content: str) -> None:
+        """往历史里追加一条 user 消息（如完成前的验证提醒），下轮随历史一起发出。"""
+        self.turns.append([{"role": "user", "content": content}])
 
     def limit_tool_result(self, text: str) -> str:
         """工具结果进上下文前的长度限制。"""
@@ -192,7 +187,11 @@ class ContextManager:
         摘要失败（抛异常或返回空）时不丢弃暂存内容，下次调用重试，
         并打印警告，保证不会因为摘要失败而静默丢失上下文信息。
         """
-        if len(self._pending_turns) < MIN_SUMMARY_TURNS:
+        if not self._pending_turns:
+            return
+        # 按「信息量」触发：待摘要的轮累计到约 SUMMARY_BUFFER_TOKENS token 才真正摘要
+        flat = [m for turn in self._pending_turns for m in turn]
+        if estimate_messages_tokens(flat) < SUMMARY_BUFFER_TOKENS:
             return
         try:
             new_summary = self._summarize(self._pending_turns)

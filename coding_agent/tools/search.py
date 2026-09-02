@@ -32,6 +32,9 @@ def _grep(args: dict) -> ToolResult:
     except re.error as e:
         return ToolResult(output=f"正则表达式无效：{e}", is_error=True)
 
+    if not root.is_dir():
+        return ToolResult(output=f"目录不存在：{root}", is_error=True)
+
     hits: list[str] = []
     for p in sorted(root.rglob("*")):
         if not p.is_file() or _skip(p):
