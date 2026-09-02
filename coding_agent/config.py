@@ -46,6 +46,9 @@ class Config:
     model: str
     max_turns: int
     timeout: float
+    max_context_tokens: int
+    tool_result_max_chars: int
+    enable_summarization: bool
 
     @classmethod
     def load(cls) -> "Config":
@@ -66,4 +69,13 @@ class Config:
             model=os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
             max_turns=int(os.environ.get("AGENT_MAX_TURNS", "30")),
             timeout=float(os.environ.get("AGENT_TIMEOUT", "120")),
+            # deepseek-chat 上下文窗口约 64K，预留输出空间后取 40K 作为裁剪预算
+            max_context_tokens=int(os.environ.get("AGENT_MAX_CONTEXT_TOKENS", "40000")),
+            # 单个工具结果进上下文前的字符上限
+            tool_result_max_chars=int(os.environ.get("AGENT_TOOL_RESULT_MAX_CHARS", "8000")),
+            # 上下文超预算时，是否用摘要压缩旧历史（0/false 则直接丢弃）
+            enable_summarization=os.environ.get("AGENT_ENABLE_SUMMARIZATION", "1")
+            .strip()
+            .lower()
+            not in ("0", "false", "no", "off"),
         )
